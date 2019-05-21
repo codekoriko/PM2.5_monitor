@@ -150,24 +150,34 @@ void setClock() {
 }
 
 // Try and connect using a WiFiClientBearSSL to specified host:port and dump URL
-void fetchURL(BearSSL::WiFiClientSecure *client, const char *host, const uint16_t port, const char *path) {
+void POST_data(BearSSL::WiFiClientSecure *client, String host, const uint16_t port, String path, String payload) {
   if (!path) {
     path = "/";
   }
 
-  Serial.printf("Trying: %s:443...", host);
+  Serial.println("Trying: " + host + "");
   client->connect(host, port);
   if (!client->connected()) {
     Serial.printf("*** Can't connect. ***\n-------\n");
     return;
   }
   Serial.printf("Connected!\n-------\n");
-  client->write("GET ");
-  client->write(path);
-  client->write(" HTTP/1.0\r\nHost: ");
-  client->write(host);
-  client->write("\r\nUser-Agent: ESP8266\r\n");
-  client->write("\r\n");
+  Serial.println(payload);
+  Serial.println("POST " + path + " HTTP/1.0");
+  Serial.println("Host: " + host);
+  Serial.println("User-Agent: ESP8266");
+  Serial.print("Content-Length: ");
+  Serial.println(payload.length());
+  Serial.println("Content-type: text/plain");
+  client->println("POST " + path + " HTTP/1.0");
+  client->println("Host: " + host);
+  client->println("User-Agent: ESP8266");
+  client->print("Content-Length: ");
+  client->println(payload.length());
+  client->println("Content-type: application/x-www-form-urlencoded");
+  client->println();
+  client->println(payload);
+
   uint32_t to = millis() + 5000;
   if (client->connected()) {
     do {
@@ -227,27 +237,19 @@ void setup() {
     Serial.printf("No certs found. Did you run certs-from-mozill.py and upload the SPIFFS directory before running?\n");
     return; // Can't connect to anything w/o certs!
   }
-
-  BearSSL::WiFiClientSecure *bear = new BearSSL::WiFiClientSecure();
-  // Integrate the cert store with this connection
-  bear->setCertStore(&certStore);
-  Serial.printf("Attempting to fetch https://www.github.com/...\n");
-  fetchURL(bear, "www.github.com", 443, "/");
-  delete bear;
 }
 
 void loop() {
-  Serial.printf("\nPlease enter a website address (www.blah.com) to connect to: ");
+  Serial.printf("\npress anykey when ready to send POST request");
   String site;
   do {
     site = Serial.readString();
   } while (site == "");
-  Serial.printf("https://%s/\n", site.c_str());
-
+  
   BearSSL::WiFiClientSecure *bear = new BearSSL::WiFiClientSecure();
   // Integrate the cert store with this connection
   bear->setCertStore(&certStore);
-  fetchURL(bear, site.c_str(), 443, "/");
+  POST_data(bear, "webhook.site", 443, "/172009bf-aa8e-4edf-84e8-8792a7edd6a7", "name1=value1&name2=value2");
   delete bear;
 }
 
