@@ -161,14 +161,6 @@ void POST_data(BearSSL::WiFiClientSecure *client, String host, const uint16_t po
     Serial.printf("*** Can't connect. ***\n-------\n");
     return;
   }
-  Serial.printf("Connected!\n-------\n");
-  Serial.println(payload);
-  Serial.println("POST " + path + " HTTP/1.0");
-  Serial.println("Host: " + host);
-  Serial.println("User-Agent: ESP8266");
-  Serial.print("Content-Length: ");
-  Serial.println(payload.length());
-  Serial.println("Content-type: text/plain");
   client->println("POST " + path + " HTTP/1.0");
   client->println("Host: " + host);
   client->println("User-Agent: ESP8266");
@@ -249,7 +241,7 @@ void loop() {
   BearSSL::WiFiClientSecure *bear = new BearSSL::WiFiClientSecure();
   // Integrate the cert store with this connection
   bear->setCertStore(&certStore);
-  POST_data(bear, "webhook.site", 443, "/172009bf-aa8e-4edf-84e8-8792a7edd6a7", "name1=value1&name2=value2");
+  POST_data(bear, "script.google.com", 443, "/macros/s/AKfycbygDBU_D707uUZQpxZ65yNgMNi3KchNec0sfmTovWo3OSErTyU/exec", "Temperature=45&Humidity=15");
   delete bear;
 }
 
