@@ -103,9 +103,76 @@ SPIFFSCertStoreFile certs_ar("/certs.ar"); // Uploaded by the user
 // ###########################################################
 
 // retrieve the temperature and the humidity from the DHT11
-void readDataSensor() {
+std::pair<int, int> getAveragePm2dot5(int nb_measurement) {
+  const auto n = Pmsx003::Reserved;
+  Pmsx003::pmsData data[n];
+  float measurement_data[10] = {};
+  float current_measurement = 0;
+  auto prior_measurement_timestamp = 0;
+  int measurement_duration = 0;
 
+  Serial.println("Waking-up the sensor...");
+  pms.write(Pmsx003::cmdWakeup);
+  pms.waitForData(Pmsx003::wakeupTime);
+  delay(5000);
+	
+  Serial.println("starting measurement...");
+  int j = 0;
+  
+  for (int i = 0; i < 10; ++i) {
+   prior_measurement_timestamp = millis();
+    for (int k = 0; k < 200 ; k++){
+      Pmsx003::PmsStatus status = pms.read(data, n);
+      delay(200);
+      switch (status) {
+        case Pmsx003::OK:
+        {
+          measurement_duration = millis() - prior_measurement_timestamp;
+          Serial.print((String)"measurement "+i+"succeed in "+measurement_duration+" ms : ");
+          k = 200;
+          // For loop starts from 3
+          // Skip the first three data (PM1dot0CF1, PM2dot5CF1, PM10CF1)
+          for (size_t i = Pmsx003::PM1dot0; i < n-6; ++i)
+            Serial.print((String)data[i]+" "+Pmsx003::dataNames[i]+" | ");
+          Serial.println();
+          current_measurement = data[4];
+        }
+        case Pmsx003::noData:
+          break;
+        default:
+          Serial.println((String)"measurement "+i+" failed ("+Pmsx003::errorMsg[status]+"), retrying...");
+          //Serial.println(Pmsx003::errorMsg[status]);
+      };
+    }
+    
+    // Check if current measurement is not too far off
+    if (current_measurement != 0){
+      if ( j == 0 ){
+        measurement_data[j] = current_measurement;
+        j++;
+      } else if ( fabs(measurement_data[j-1]-current_measurement) < 20 ) { 
+        Serial.println((String)"Epsilon measurement in the acceptable range: "+(measurement_data[j-1]-current_measurement));
+        measurement_data[j] = current_measurement;
+        j++;
+      } else
+          Serial.println((String)"Epsilon measurement out of the acceptable range: "+(measurement_data[j-1]-current_measurement));
+    } else
+      Serial.println("Couldn't get any data from the sensor");
+    delay(3000);
+  }
 
+  int nb_element = sizeof(measurement_data) / sizeof(measurement_data[0]); 
+  if (nb_element > 2){
+    float sum = 0;
+    double pm2dot5_avg = 0;
+    for (int i = 0; i < nb_element; i++){
+      Serial.println((String)"measurement "+i+": "+measurement_data[i]);
+      sum += measurement_data[i];
+    }
+    pm2dot5_avg = (int)round(sum / nb_element);
+
+    return std::make_pair(pm2dot5_avg, measurement_duration);
+  }
 }
 
 // Set time via NTP, as required for x.509 validation
@@ -227,69 +294,31 @@ void setup() {
 // ###########################################################
 bool measurement_sucessful = 0;
 void loop(void) {
+  int sec_wait_main_loop = 50;
+	
+  std::pair<int, int> measurement_data = getAveragePm2dot5(10); 
 
-  float pm2dot5;
-	const auto n = Pmsx003::Reserved;
-  auto preReading = millis();
-  pms.write(Pmsx003::cmdWakeup);
-  pms.waitForData(Pmsx003::wakeupTime);
-  delay(10000);
-	Pmsx003::pmsData data[n];
-	Pmsx003::PmsStatus status = pms.read(data, n);
-  auto postReading = millis();
-  auto sampling_time = postReading - preReading;
+  float humidity = dht.getHumidity();
+  float temperature = dht.getTemperature();
+
+  String buf;
+  buf += F("Temperature=");
+  buf += String(temperature, 3);
+  buf += F("&Humidity=");
+  buf += String(humidity, 3);
+  buf += F("&PM2.5=");
+  buf += String(measurement_data.first);
+  buf += F("&Meas.%20duration=");
+  buf += String(measurement_data.second);
+
+  BearSSL::WiFiClientSecure *bear = new BearSSL::WiFiClientSecure();
+  // Integrate the cert store with this connection
+  bear->setCertStore(&certStore);
+  POST_data(bear, "script.google.com", 443, "/macros/s/AKfycbxUjBnKnfZZgr2jZw2yLCmDdXdZl6BAxd3pF-jQfVrHiWbYD-M/exec", buf);
+  delete bear;
 
 
-	switch (status) {
-		case Pmsx003::OK:
-		{
-			measurement_sucessful = 1;
-      Serial.println("_________________");
-			Serial.print("Wait time ");
-			Serial.println(sampling_time);
-
-			// For loop starts from 3
-			// Skip the first three data (PM1dot0CF1, PM2dot5CF1, PM10CF1)
-			for (size_t i = Pmsx003::PM1dot0; i < n-6; ++i) { 
-				Serial.print(data[i]);
-				Serial.print("\t");
-				Serial.print(Pmsx003::dataNames[i]);
-				Serial.print(" [");
-				Serial.print(Pmsx003::metrics[i]);
-				Serial.print("]");
-				Serial.println();
-			}
-      pm2dot5 = data[4];
-			break;
-		}
-		case Pmsx003::noData:
-			break;
-		default:
-			Serial.println("_________________");
-			Serial.println(Pmsx003::errorMsg[status]);
-	};
-
-  if (measurement_sucessful) {
-    float humidity = dht.getHumidity();
-    float temperature = dht.getTemperature();
-
-    String buf;
-    buf += F("Temperature=");
-    buf += String(temperature, 3);
-    buf += F("&Humidity=");
-    buf += String(humidity, 3);
-    buf += F("&PM2.5=");
-    buf += String(pm2dot5, 3);
-    buf += F("&Sampling%20time=");
-    buf += String(sampling_time/1000, 3);
-    
-    BearSSL::WiFiClientSecure *bear = new BearSSL::WiFiClientSecure();
-    // Integrate the cert store with this connection
-    bear->setCertStore(&certStore);
-    POST_data(bear, "script.google.com", 443, "/macros/s/AKfycbxUjBnKnfZZgr2jZw2yLCmDdXdZl6BAxd3pF-jQfVrHiWbYD-M/exec", buf);
-    delete bear;
-  }
-  Serial.println("end of loop, putting to sleep pms7003, waiting 8s");
+  Serial.println((String)"end of loop, putting the sensor to sleep for: "+sec_wait_main_loop);
   pms.write(Pmsx003::cmdSleep);
-  delay(50000);
+  delay(sec_wait_main_loop*1000);
 }
