@@ -119,22 +119,21 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
   delay(5000);
 	
   Serial.println("starting measurement...");
-  
+  prior_measurement_timestamp = millis();
   for (int i = 0; i < 10; ++i) {
-   prior_measurement_timestamp = millis();
-    for (int k = 0; k < 200 ; k++){
+    for (int j = 0; j < 200 ; j++){
       Pmsx003::PmsStatus status = pms.read(data, n);
       delay(200);
       switch (status) {
         case Pmsx003::OK:
         {
           measurement_duration = millis() - prior_measurement_timestamp;
-          Serial.print((String)"measurement "+i+" succeed in "+measurement_duration+" ms : ");
-          k = 200;
+          Serial.print((String)"measurement "+i+" succeeded in "+measurement_duration+" ms : ");
+          j = 200;
           // For loop starts from 3
           // Skip the first three data (PM1dot0CF1, PM2dot5CF1, PM10CF1)
           for (size_t i = Pmsx003::PM1dot0; i < n-6; ++i)
-            Serial.print((String)data[i]+" "+Pmsx003::dataNames[i]+" | ");
+            Serial.print((String)"\t"+data[i]+" "+Pmsx003::dataNames[i]);
           Serial.println();
           current_measurement = data[4];
         }
@@ -153,28 +152,40 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
       return std::make_pair(0, 0);
     }
   }
+  Serial.println();
 
   int nb_element = sizeof(measurement_data) / sizeof(measurement_data[0]); 
-  uint16_t sum = 0;
-  uint16_t pm2dot5_avg = 0;
-  uint16_t reference = 0;
-  int nb_valid_measurement = 0;
-  //define measure reference
-  if (abs(measurement_data[0] - measurement_data[1]) < 20 )
-    reference = measurement_data[0];
-  else if (abs(measurement_data[0] - measurement_data[2]) > 20)
-    reference = measurement_data[1];
-  Serial.println((String)"reference taken: "+reference);
+  int epsilon_avg[10] = {};
+  // get the average epsilon for each measurement
+  for (int i = 0; i < nb_element; i++){
+    int epsilon_sum = 0;
+    for (int j = 0; j < nb_element; j++)
+      epsilon_sum += abs(measurement_data[i] - measurement_data[j]);
+    epsilon_avg[i] = (int)round(epsilon_sum / nb_element);
+  }
+
+  uint16_t reference = measurement_data[0];
+  int smallest_epsilon = epsilon_avg[0];
+  for (int i = 0; i < nb_element; i++){
+    if (epsilon_avg[i] < smallest_epsilon){
+      smallest_epsilon = epsilon_avg[i];
+      reference = measurement_data[i];
+    }
+  }
+  Serial.println((String)"Measurement value "+reference+" has the smallest averaged Epsilon: "+smallest_epsilon);
+
   // if the measurement epsilon is less than 20 off from the reference, then, 
   // take into the avg calculation
+  uint16_t sum = 0;
+  uint16_t pm2dot5_avg = 0;
+  int nb_valid_measurement = 0;
   for (int i = 0; i < nb_element; i++){
-    Serial.println((String)"testing measurement"+i+": "+measurement_data[i]);
-    int epsilon = abs(measurement_data[i] - reference);
-    if (epsilon < 20){
-      Serial.println((String)"measurement valid, Epsilon = "+epsilon);
+    if (epsilon_avg[i] < 15){
       sum += measurement_data[i];
       nb_valid_measurement++;
-    }
+    } 
+    else
+      Serial.println((String)"measurement "+i+" was rejected! the value "+measurement_data[i]+" has an averaged Epsilon of "+epsilon_avg[i]);
   }
   pm2dot5_avg = (uint16_t)round(sum / nb_valid_measurement);
 
