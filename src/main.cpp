@@ -45,8 +45,10 @@ Pmsx003 pms(D6, D7); //rx, tx
 DHTesp dht;
 
 #ifndef STASSID
-#define STASSID "Mike Homestay 4"
-#define STAPSK  "vietnam1"
+//#define STASSID "Mike Homestay 4"
+//#define STAPSK  "vietnam1"#
+#define STASSID "ComchayCafe"
+#define STAPSK  "123456789"
 #endif
 
 const char *ssid = STASSID;
@@ -102,14 +104,14 @@ SPIFFSCertStoreFile certs_ar("/certs.ar"); // Uploaded by the user
 // #########################FONCTIONS#########################
 // ###########################################################
 
-// retrieve the temperature and the humidity from the DHT11
-std::pair<int, int> getAveragePm2dot5(int nb_measurement) {
+
+std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
   const auto n = Pmsx003::Reserved;
   Pmsx003::pmsData data[n];
-  float measurement_data[10] = {};
-  float current_measurement = 0;
+  uint16_t measurement_data[10] = {};
+  uint16_t current_measurement = 0;
   auto prior_measurement_timestamp = 0;
-  int measurement_duration = 0;
+  uint16_t measurement_duration = 0;
 
   Serial.println("Waking-up the sensor...");
   pms.write(Pmsx003::cmdWakeup);
@@ -117,7 +119,6 @@ std::pair<int, int> getAveragePm2dot5(int nb_measurement) {
   delay(5000);
 	
   Serial.println("starting measurement...");
-  int j = 0;
   
   for (int i = 0; i < 10; ++i) {
    prior_measurement_timestamp = millis();
@@ -128,7 +129,7 @@ std::pair<int, int> getAveragePm2dot5(int nb_measurement) {
         case Pmsx003::OK:
         {
           measurement_duration = millis() - prior_measurement_timestamp;
-          Serial.print((String)"measurement "+i+"succeed in "+measurement_duration+" ms : ");
+          Serial.print((String)"measurement "+i+" succeed in "+measurement_duration+" ms : ");
           k = 200;
           // For loop starts from 3
           // Skip the first three data (PM1dot0CF1, PM2dot5CF1, PM10CF1)
@@ -145,34 +146,40 @@ std::pair<int, int> getAveragePm2dot5(int nb_measurement) {
       };
     }
     
-    // Check if current measurement is not too far off
     if (current_measurement != 0){
-      if ( j == 0 ){
-        measurement_data[j] = current_measurement;
-        j++;
-      } else if ( fabs(measurement_data[j-1]-current_measurement) < 20 ) { 
-        Serial.println((String)"Epsilon measurement in the acceptable range: "+(measurement_data[j-1]-current_measurement));
-        measurement_data[j] = current_measurement;
-        j++;
-      } else
-          Serial.println((String)"Epsilon measurement out of the acceptable range: "+(measurement_data[j-1]-current_measurement));
-    } else
+      measurement_data[i] = current_measurement;
+    }else{
       Serial.println("Couldn't get any data from the sensor");
-    delay(3000);
+      return std::make_pair(0, 0);
+    }
   }
 
   int nb_element = sizeof(measurement_data) / sizeof(measurement_data[0]); 
-  if (nb_element > 2){
-    float sum = 0;
-    double pm2dot5_avg = 0;
-    for (int i = 0; i < nb_element; i++){
-      Serial.println((String)"measurement "+i+": "+measurement_data[i]);
+  uint16_t sum = 0;
+  uint16_t pm2dot5_avg = 0;
+  uint16_t reference = 0;
+  int nb_valid_measurement = 0;
+  //define measure reference
+  if (abs(measurement_data[0] - measurement_data[1]) < 20 )
+    reference = measurement_data[0];
+  else if (abs(measurement_data[0] - measurement_data[2]) > 20)
+    reference = measurement_data[1];
+  Serial.println((String)"reference taken: "+reference);
+  // if the measurement epsilon is less than 20 off from the reference, then, 
+  // take into the avg calculation
+  for (int i = 0; i < nb_element; i++){
+    Serial.println((String)"testing measurement"+i+": "+measurement_data[i]);
+    int epsilon = abs(measurement_data[i] - reference);
+    if (epsilon < 20){
+      Serial.println((String)"measurement valid, Epsilon = "+epsilon);
       sum += measurement_data[i];
+      nb_valid_measurement++;
     }
-    pm2dot5_avg = (int)round(sum / nb_element);
-
-    return std::make_pair(pm2dot5_avg, measurement_duration);
   }
+  pm2dot5_avg = (uint16_t)round(sum / nb_valid_measurement);
+
+  return std::make_pair(pm2dot5_avg, measurement_duration);
+
 }
 
 // Set time via NTP, as required for x.509 validation
