@@ -14,7 +14,8 @@
 			"initializer_list": "cpp",
 			"cmath": "cpp",
 			"cstdlib": "cpp",
-			"limits": "cpp"
+			"limits": "cpp",
+			"string": "cpp"
 		}
 	}
 }

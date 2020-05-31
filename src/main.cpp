@@ -37,22 +37,23 @@
 #include <CertStoreBearSSL.h>
 #include <time.h>
 
+#include <DNSServer.h>            //Local DNS Server used for redirecting all requests to the configuration portal
+#include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
+#include <WiFiManager.h>  
+
 #include <pms.h>
 #include <DHTesp.h>
 
-Pmsx003 pms(D6, D7); //rx, tx
+#define PMS7001_TX D6 // blue
+#define PMS7001_RX D7 // black
+#define DHT_OUT D5
+Pmsx003 pms(PMS7001_TX, PMS7001_RX); //PMS7001-tx_pin, PMS7001-rx_pin
+int sec_wait_main_loop = 600;
+// char script_path[] = "/macros/s/AKfycbxUjBnKnfZZgr2jZw2yLCmDdXdZl6BAxd3pF-jQfVrHiWbYD-M/exec"; // Mine
+// char script_path[] = "/macros/s/AKfycbwtS8J8xPTmB2prrsEksV8HPwQPepMliWRVU7yAWTXfkRRp1DU/exec"; // Clement
+char script_path[] = "/macros/s/AKfycbziobVN47X4xPGi_UukL-OifqfaEfNziwXjORNyTgDhMOolB0UH/exec"; // Philippe
 
 DHTesp dht;
-
-#ifndef STASSID
-//#define STASSID "Mike Homestay 4"
-//#define STAPSK  "vietnam1"#
-#define STASSID "ComchayCafe"
-#define STAPSK  "123456789"
-#endif
-
-const char *ssid = STASSID;
-const char *pass = STAPSK;
 
 // A single, global CertStore which can be used by all
 // connections.  Needs to stay live the entire time any of
@@ -111,6 +112,7 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
   uint16_t measurement_data[10] = {};
   uint16_t current_measurement = 0;
   auto prior_measurement_timestamp = 0;
+  uint16_t current_measurement_duration = 0;
   uint16_t measurement_duration = 0;
 
   Serial.println("Waking-up the sensor...");
@@ -119,15 +121,16 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
   delay(5000);
 	
   Serial.println("starting measurement...");
-  prior_measurement_timestamp = millis();
   for (int i = 0; i < 10; ++i) {
+    prior_measurement_timestamp = millis();
     for (int j = 0; j < 200 ; j++){
       Pmsx003::PmsStatus status = pms.read(data, n);
       delay(200);
       switch (status) {
         case Pmsx003::OK:
         {
-          measurement_duration = millis() - prior_measurement_timestamp;
+          current_measurement_duration = millis() - prior_measurement_timestamp;
+          measurement_duration += current_measurement_duration;
           Serial.print((String)"measurement "+i+" succeeded in "+measurement_duration+" ms : ");
           j = 200;
           // For loop starts from 3
@@ -151,6 +154,8 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
       Serial.println("Couldn't get any data from the sensor");
       return std::make_pair(0, 0);
     }
+    // delay between each 10 measurements
+    delay(2000);
   }
   Serial.println();
 
@@ -274,26 +279,12 @@ void setup() {
 	pms.write(Pmsx003::cmdModeActive);
 	
 	Serial.println("Initializing DHT11 on PIN D5...");
-	dht.setup(D5, DHTesp::DHT11);
+	dht.setup(DHT_OUT, DHTesp::DHT11);
 
   SPIFFS.begin();
 
-
-  // We start by connecting to a WiFi network
-  Serial.print("Connecting to ");
-  Serial.println(ssid);
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(ssid, pass);
-
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
-  }
-  Serial.println("");
-
-  Serial.println("WiFi connected");
-  Serial.println("IP address: ");
-  Serial.println(WiFi.localIP());
+  WiFiManager wifiManager;
+  wifiManager.autoConnect();
 
   // Initializing the certification store
   setClock(); // Required for X.509 validation
@@ -312,7 +303,6 @@ void setup() {
 // ###########################################################
 bool measurement_sucessful = 0;
 void loop(void) {
-  int sec_wait_main_loop = 50;
 	
   std::pair<int, int> measurement_data = getAveragePm2dot5(10); 
 
@@ -320,10 +310,10 @@ void loop(void) {
   float temperature = dht.getTemperature();
 
   String buf;
-  buf += F("Temperature=");
-  buf += String(temperature, 3);
-  buf += F("&Humidity=");
-  buf += String(humidity, 3);
+  // buf += F("Temperature=");
+  // buf += String(temperature, 3);
+  // buf += F("&Humidity=");
+  // buf += String(humidity, 3);
   buf += F("&PM2.5=");
   buf += String(measurement_data.first);
   buf += F("&Meas.%20duration=");
@@ -332,7 +322,7 @@ void loop(void) {
   BearSSL::WiFiClientSecure *bear = new BearSSL::WiFiClientSecure();
   // Integrate the cert store with this connection
   bear->setCertStore(&certStore);
-  POST_data(bear, "script.google.com", 443, "/macros/s/AKfycbxUjBnKnfZZgr2jZw2yLCmDdXdZl6BAxd3pF-jQfVrHiWbYD-M/exec", buf);
+  POST_data(bear, "script.google.com", 443, script_path, buf);
   delete bear;
 
 
