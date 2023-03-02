@@ -1,108 +1,60 @@
-// Demonstrate the CertStore object with WiFiClientBearSSL
-//
-// Before running, you must download the set of certs using
-// the script "certs-from-mozilla.py" (no parameters)
-// and then uploading the generated .AR file to SPIFFS or SD.
-//
-// You do not need to generate the ".IDX" file listed below,
-// it is generated automatically when the CertStore object
-// is created and written to SD or SPIFFS by the ESP8266.
-//
-// Why would you need a CertStore?
-//
-// If you know the exact server being connected to, or you
-// are generating your own self-signed certificates and aren't
-// allowing connections to HTTPS/TLS servers out of your
-// control, then you do NOT want a CertStore.  Hardcode the
-// self-signing CA or the site's x.509 certificate directly.
-//
-// However, if you don't know what specific sites the system
-// will be required to connect to and verify, a
-// CertStore can allow you to select from among
-// 10s or 100s of CAs against which you can check the
-// target's X.509, without taking any more RAM than a single
-// certificate.  This is the same way that standard browsers
-// and operating systems verify SSL connections.
-//
-// About the chosen certs:
-// The certificates are scraped from the Mozilla.org current
-// list, but please don't take this as an endorsement or a
-// requirement:  it is up to YOU, the USER, to specify the
-// certificate authorities you will use as trust bases.
-//
-// Mar 2018 by Earle F. Philhower, III
-// Released to the public domain
+// Example Arduino/ESP8266 code to upload data to Google Sheets
+// Follow setup instructions found here:
+// https://github.com/StorageB/Google-Sheets-Logging
+// reddit: u/StorageB107
+// email: StorageUnitB@gmail.com
 
+
+#include <Arduino.h>
 #include <ESP8266WiFi.h>
-#include <CertStoreBearSSL.h>
-#include <time.h>
-
-#include <DNSServer.h>            //Local DNS Server used for redirecting all requests to the configuration portal
-#include <ESP8266WebServer.h>     //Local WebServer used to serve the configuration portal
-#include <WiFiManager.h>  
+#include "HTTPSRedirect.h"
 
 #include <pms.h>
-#include <DHTesp.h>
+// #include <DHTesp.h>
+
+// ###########################################################
+// #####################SETUP Gapp Script#####################
+// ###########################################################
+
+// Enter network credentials:
+const char* ssid     = "TANG 8";
+const char* password = "88888888";
+
+// Enter Google Script Deployment ID:
+const char *GScriptId = "AKfycbzxYrJd6lzyuP90IjHdNftWQAiq4AXKB7g540niBL2tg8aWfLybOJZ9mnejdLcBvGxw";
+
+// Enter command (insert_row or append_row) and your Google Sheets sheet name (default is Sheet1):
+String payload_base =  "{\"command\": \"append_row\", \"sheet_name\": \"Sheet1\", \"values\": ";
+String payload = "";
+
+// Google Sheets setup (do not edit)
+const char* host = "script.google.com";
+const int httpsPort = 443;
+const char* fingerprint = "";
+String url = String("/macros/s/") + GScriptId + "/exec";
+HTTPSRedirect* client = nullptr;
+
+// ###########################################################
+// #########################SETUP PMS#########################
+// ###########################################################
 
 #define PMS7001_TX D6 // blue
 #define PMS7001_RX D7 // black
-#define DHT_OUT D5
+// #define DHT_OUT D5
 Pmsx003 pms(PMS7001_TX, PMS7001_RX); //PMS7001-tx_pin, PMS7001-rx_pin
 int sec_wait_main_loop = 600;
-// char script_path[] = "/macros/s/AKfycbxUjBnKnfZZgr2jZw2yLCmDdXdZl6BAxd3pF-jQfVrHiWbYD-M/exec"; // Mine
-// char script_path[] = "/macros/s/AKfycbwtS8J8xPTmB2prrsEksV8HPwQPepMliWRVU7yAWTXfkRRp1DU/exec"; // Clement
-char script_path[] = "/macros/s/AKfycbziobVN47X4xPGi_UukL-OifqfaEfNziwXjORNyTgDhMOolB0UH/exec"; // Philippe
 
-DHTesp dht;
+// DHTesp dht;
 
-// A single, global CertStore which can be used by all
-// connections.  Needs to stay live the entire time any of
-// the WiFiClientBearSSLs are present.
-BearSSL::CertStore certStore;
-
-
-// NOTE: The CertStoreFile virtual class may migrate to a templated
-// model in a future release. Expect some changes to the interface,
-// no matter what, as the SD and SPIFFS filesystem get unified.
-
-#include <FS.h>
-class SPIFFSCertStoreFile : public BearSSL::CertStoreFile {
-  public:
-    SPIFFSCertStoreFile(const char *name) {
-      _name = name;
-    };
-    virtual ~SPIFFSCertStoreFile() override {};
-
-    // The main API
-    virtual bool open(bool write = false) override {
-      _file = SPIFFS.open(_name, write ? "w" : "r");
-      return _file;
-    }
-    virtual bool seek(size_t absolute_pos) override {
-      return _file.seek(absolute_pos, SeekSet);
-    }
-    virtual ssize_t read(void *dest, size_t bytes) override {
-      return _file.readBytes((char*)dest, bytes);
-    }
-    virtual ssize_t write(void *dest, size_t bytes) override {
-      return _file.write((uint8_t*)dest, bytes);
-    }
-    virtual void close() override {
-      _file.close();
-    }
-
-  private:
-    File _file;
-    const char *_name;
-};
-
-SPIFFSCertStoreFile certs_idx("/certs.idx"); // Generated by the ESP8266
-SPIFFSCertStoreFile certs_ar("/certs.ar"); // Uploaded by the user
-
+// Example Arduino/ESP8266 code to upload data to Google Sheets
+// Follow setup instructions found here:
+// https://github.com/StorageB/Google-Sheets-Logging
+// reddit: u/StorageB107
+// email: StorageUnitB@gmail.com
 
 
 // ###########################################################
-// #########################FONCTIONS#########################
+// ######################MEASURE FUNCT########################
 // ###########################################################
 
 
@@ -119,7 +71,7 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
   pms.write(Pmsx003::cmdWakeup);
   pms.waitForData(Pmsx003::wakeupTime);
   delay(5000);
-	
+
   Serial.println("starting measurement...");
   for (int i = 0; i < 10; ++i) {
     prior_measurement_timestamp = millis();
@@ -147,7 +99,7 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
           //Serial.println(Pmsx003::errorMsg[status]);
       };
     }
-    
+
     if (current_measurement != 0){
       measurement_data[i] = current_measurement;
     }else{
@@ -159,7 +111,9 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
   }
   Serial.println();
 
-  int nb_element = sizeof(measurement_data) / sizeof(measurement_data[0]); 
+  Serial.println("measurement finish");
+
+  int nb_element = sizeof(measurement_data) / sizeof(measurement_data[0]);
   int epsilon_avg[10] = {};
   // get the average epsilon for each measurement
   for (int i = 0; i < nb_element; i++){
@@ -179,7 +133,7 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
   }
   Serial.println((String)"Measurement value "+reference+" has the smallest averaged Epsilon: "+smallest_epsilon);
 
-  // if the measurement epsilon is less than 20 off from the reference, then, 
+  // if the measurement epsilon is less than 20 off from the reference, then,
   // take into the avg calculation
   uint16_t sum = 0;
   uint16_t pm2dot5_avg = 0;
@@ -188,7 +142,7 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
     if (epsilon_avg[i] < 15){
       sum += measurement_data[i];
       nb_valid_measurement++;
-    } 
+    }
     else
       Serial.println((String)"measurement "+i+" was rejected! the value "+measurement_data[i]+" has an averaged Epsilon of "+epsilon_avg[i]);
   }
@@ -198,68 +152,6 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement) {
 
 }
 
-// Set time via NTP, as required for x.509 validation
-void setClock() {
-  configTime(3 * 3600, 0, "pool.ntp.org", "time.nist.gov");
-
-  Serial.print("Waiting for NTP time sync: ");
-  time_t now = time(nullptr);
-  while (now < 8 * 3600 * 2) {
-    delay(500);
-    Serial.print(".");
-    now = time(nullptr);
-  }
-  Serial.println("");
-  struct tm timeinfo;
-  gmtime_r(&now, &timeinfo);
-  Serial.print("Current time: ");
-  Serial.print(asctime(&timeinfo));
-}
-
-// Try and connect using a WiFiClientBearSSL to specified host:port and dump URL
-void POST_data(BearSSL::WiFiClientSecure *client, String host, const uint16_t port, String path, String payload) {
-  if (!path) {
-    path = "/";
-  }
-
-  Serial.println("\nTrying: " + host + "");
-  client->connect(host, port);
-  if (!client->connected()) {
-    Serial.printf("*** Can't connect. ***\n-------\n");
-    return;
-  }
-  client->println("POST " + path + " HTTP/1.0");
-  client->println("Host: " + host);
-  client->println("User-Agent: ESP8266");
-  client->print("Content-Length: ");
-  client->println(payload.length());
-  client->println("Content-type: application/x-www-form-urlencoded");
-  client->println();
-  client->println(payload);
-
-  uint32_t to = millis() + 5000;
-  if (client->connected()) {
-    do {
-      char tmp[32];
-      memset(tmp, 0, 32);
-      int rlen = client->read((uint8_t*)tmp, sizeof(tmp) - 1);
-      yield();
-      if (rlen < 0) {
-        break;
-      }
-      // Only print out first line up to \r, then abort connection
-      char *nl = strchr(tmp, '\r');
-      if (nl) {
-        *nl = 0;
-        Serial.print(tmp);
-        break;
-      }
-      Serial.print(tmp);
-    } while (millis() < to);
-  }
-  client->stop();
-  Serial.printf("\n-------\n");
-}
 
 // ###########################################################
 // #########################SETUP#############################
@@ -277,23 +169,52 @@ void setup() {
   pms.write(Pmsx003::cmdWakeup);
   pms.waitForData(Pmsx003::wakeupTime);
 	pms.write(Pmsx003::cmdModeActive);
-	
-	Serial.println("Initializing DHT11 on PIN D5...");
-	dht.setup(DHT_OUT, DHTesp::DHT11);
 
-  SPIFFS.begin();
+	// Serial.println("Initializing DHT11 on PIN D5...");
+	// dht.setup(DHT_OUT, DHTesp::DHT11);
 
-  WiFiManager wifiManager;
-  wifiManager.autoConnect();
+  // Connect to WiFi
+  WiFi.begin(ssid, password);
+  Serial.print("Connecting to ");
+  Serial.print(ssid); Serial.println(" ...");
 
-  // Initializing the certification store
-  setClock(); // Required for X.509 validation
-  int numCerts = certStore.initCertStore(&certs_idx, &certs_ar);
-  Serial.printf("Number of CA certs read: %d\n", numCerts);
-  if (numCerts == 0) {
-    Serial.printf("No certs found. Did you run certs-from-mozill.py and upload the SPIFFS directory before running?\n");
-    return; // Can't connect to anything w/o certs!
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(1000);
+    Serial.print(".");
   }
+  Serial.println('\n');
+  Serial.println("Connection established!");
+  Serial.print("IP address:\t");
+  Serial.println(WiFi.localIP());
+
+  // Use HTTPSRedirect class to create a new TLS connection
+  client = new HTTPSRedirect(httpsPort);
+  client->setInsecure();
+  client->setPrintResponseBody(true);
+  client->setContentTypeHeader("application/json");
+
+  Serial.print("Connecting to ");
+  Serial.println(host);
+
+  // Try to connect for a maximum of 5 times
+  bool flag = false;
+  for (int i=0; i<5; i++){
+    int retval = client->connect(host, httpsPort);
+    if (retval == 1){
+       flag = true;
+       Serial.println("Connected");
+       break;
+    }
+    else
+      Serial.println("Connection failed. Retrying...");
+  }
+  if (!flag){
+    Serial.print("Could not connect to server: ");
+    Serial.println(host);
+    return;
+  }
+  delete client;    // delete HTTPSRedirect object
+  client = nullptr; // delete HTTPSRedirect object
 
 }
 
@@ -303,27 +224,42 @@ void setup() {
 // ###########################################################
 bool measurement_sucessful = 0;
 void loop(void) {
-	
-  std::pair<int, int> measurement_data = getAveragePm2dot5(10); 
 
-  float humidity = dht.getHumidity();
-  float temperature = dht.getTemperature();
+  std::pair<int, int> measurement_data = getAveragePm2dot5(10);
 
-  String buf;
-  // buf += F("Temperature=");
-  // buf += String(temperature, 3);
-  // buf += F("&Humidity=");
-  // buf += String(humidity, 3);
-  buf += F("&PM2.5=");
-  buf += String(measurement_data.first);
-  buf += F("&Meas.%20duration=");
-  buf += String(measurement_data.second);
+  // float humidity = dht.getHumidity();
+  // float temperature = dht.getTemperature();
 
-  BearSSL::WiFiClientSecure *bear = new BearSSL::WiFiClientSecure();
-  // Integrate the cert store with this connection
-  bear->setCertStore(&certStore);
-  POST_data(bear, "script.google.com", 443, script_path, buf);
-  delete bear;
+  static bool flag = false;
+  if (!flag){
+    client = new HTTPSRedirect(httpsPort);
+    client->setInsecure();
+    flag = true;
+    client->setPrintResponseBody(true);
+    client->setContentTypeHeader("application/json");
+  }
+  if (client != nullptr){
+    if (!client->connected()){
+      client->connect(host, httpsPort);
+    }
+  }
+  else{
+    Serial.println("Error creating client object!");
+  }
+
+  // Create json object string to send to Google Sheets
+  payload = payload_base + "\"" + measurement_data.first + "," + measurement_data.second + "\"}";
+
+  // Publish data to Google Sheets
+  Serial.println("Publishing data...");
+  Serial.println(payload);
+  if(client->POST(url, host, payload)){
+    // do stuff here if publish was successful
+  }
+  else{
+    // do stuff here if publish was not successful
+    Serial.println("Error while connecting");
+  }
 
 
   Serial.println((String)"end of loop, putting the sensor to sleep for: "+sec_wait_main_loop);
