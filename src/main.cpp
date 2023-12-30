@@ -33,6 +33,15 @@ StaticJsonDocument<200> doc;
 const char *host = "script.google.com";
 String url = String("/macros/s/") + GScriptId + "/exec";
 
+// columns name must match otherwise get (not helpful error) Error! Not connected to host.
+// Timestamp col get filled by the script
+// order do matter
+const char *columns[] = {
+    "Temperature",
+    "Humidity",
+    "PM2.5",
+    "Meas. duration"};
+
 // set https
 const int httpsPort = 443;
 HTTPSRedirect *client = nullptr;
@@ -40,7 +49,6 @@ const char *ntpServer = "pool.ntp.org"; // NTP server address
 // keep time correct
 long gmtOffset_sec = 0;     // Offset from GMT in seconds
 int daylightOffset_sec = 0; // Daylight saving time offset in seconds
-
 
 // ###########################################################
 // #########################SETUP PMS#########################
@@ -224,16 +232,6 @@ void setup()
   {
   };
 
-  Serial.println(" Initializing Pms7003...");
-  pms.begin();
-  pms.waitForData(Pmsx003::wakeupTime);
-  pms.write(Pmsx003::cmdWakeup);
-  pms.waitForData(Pmsx003::wakeupTime);
-  pms.write(Pmsx003::cmdModeActive);
-
-  Serial.println("Initializing DHT11 on PIN D5...");
-  dht.setup(DHT_IN, DHTesp::DHT11);
-
   Serial.println("Connect to wifi...");
   // Connect to WiFi
   WiFiManager wifiManager;
@@ -249,12 +247,22 @@ void setup()
   // Synchronize time
   timeClient.begin();
 
-  // Use HTTPSRedirect class to create a new TLS connection
+  // if we couldn't connect we abort
   if (!connectToServer(client, host, httpsPort))
   {
     Serial.println("Exiting setup due to connection failure.");
     return;
   }
+
+  Serial.println(" Initializing Pms7003...");
+  pms.begin();
+  pms.waitForData(Pmsx003::wakeupTime);
+  pms.write(Pmsx003::cmdWakeup);
+  pms.waitForData(Pmsx003::wakeupTime);
+  pms.write(Pmsx003::cmdModeActive);
+
+  Serial.println("Initializing DHT11 on PIN D5...");
+  dht.setup(DHT_IN, DHTesp::DHT11);
 
   // Add data to the JSON document
   doc["command"] = "append_row";
@@ -306,12 +314,11 @@ void loop(void)
 
   // Create a nested JSON object for values
   JsonObject values = doc.createNestedObject("values");
-  values["pm2dot5_avg"] = measurement_data.first;
-  values["measurement_duration"] = measurement_data.second;
-
-  // Add temperature and humidity data
-  values["temperature"] = temperature;
-  values["humidity"] = humidity;
+  // Use the columns array for keys
+  values[columns[0]] = temperature;                // "Temperature"
+  values[columns[1]] = humidity;                   // "Humidity"
+  values[columns[2]] = measurement_data.first;     // "PM2.5"
+  values[columns[3]] = measurement_data.second;    // "Meas. duration"
 
   // Serialize the JSON document to a string
   String payload;
