@@ -5,9 +5,8 @@
 // email: StorageUnitB@gmail.com
 
 #include <Arduino.h>
-#include <NTPClient.h>
 #include <ArduinoJson.h> // Include the ArduinoJson library
-#include <ESP8266WiFi.h>
+// #include <ESP8266WiFi.h>
 #include "HTTPSRedirect.h"
 #include <WiFiManager.h>
 
@@ -21,13 +20,16 @@
 // Enter network credentials:
 // const char* ssid     = "TANG 8";
 // const char* password = "88888888";
-const char *ssid = "Mike Homestay 4 2.4GHz";
-const char *password = "vietnam1";
+// const char *ssid = "Mike Homestay 4 2.4GHz";
+// const char *password = "vietnam1";
 
 // Enter Google Script Deployment ID:
-const char *GScriptId = "AKfycbxUjBnKnfZZgr2jZw2yLCmDdXdZl6BAxd3pF-jQfVrHiWbYD-M";
+const char *GScriptId = "AKfycbxA5gwluyL3Nw2FK_tnUW2ix276BEaCVnsFYEc3JJIDYNHr_sQJUNh3bzOdgZyVIiI";
 // Create a JSON document
 StaticJsonDocument<200> doc;
+
+// Enter command (insert_row or append_row) and your Google Sheets sheet name (default is Sheet1):
+String payload_basev1 = "{\"command\": \"append_row\", \"sheet_name\": \"Sheet1\", \"values\": ";
 
 // Google Sheets setup (do not edit)
 const char *host = "script.google.com";
@@ -45,10 +47,6 @@ const char *columns[] = {
 // set https
 const int httpsPort = 443;
 HTTPSRedirect *client = nullptr;
-const char *ntpServer = "pool.ntp.org"; // NTP server address
-// keep time correct
-long gmtOffset_sec = 0;     // Offset from GMT in seconds
-int daylightOffset_sec = 0; // Daylight saving time offset in seconds
 
 // ###########################################################
 // #########################SETUP PMS#########################
@@ -58,6 +56,8 @@ int daylightOffset_sec = 0; // Daylight saving time offset in seconds
 #define PMS7001_RX D7 // black
 #define DHT_IN D5
 Pmsx003 pms(PMS7001_TX, PMS7001_RX); // PMS7001-tx_pin, PMS7001-rx_pin
+
+// ####measurement frequency####
 int sec_wait_main_loop = 600;
 
 DHTesp dht;
@@ -178,56 +178,13 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement)
 }
 
 // ###########################################################
-// #####################HTTPS FUNCTIONS#######################
-// ###########################################################
-
-// Function to connect to the server using HTTPSRedirect
-bool connectToServer(HTTPSRedirect *&client, const char *host, int httpsPort)
-{
-
-  // Initialize client if null
-  if (client == nullptr)
-  {
-    // Use HTTPSRedirect class to create a new TLS connection
-    client = new HTTPSRedirect(httpsPort);
-    client->setInsecure();
-    client->setPrintResponseBody(true);
-    client->setContentTypeHeader("application/json");
-    Serial.print("Connecting to ");
-    Serial.println(host); // try to connect with "script.google.com"
-  }
-
-  // Attempt to connect multiple times
-  for (int attempt = 0; attempt < 5; ++attempt)
-  {
-    Serial.print("Connection attempt ");
-    Serial.println(attempt + 1);
-
-    if (client->connect(host, httpsPort))
-    {
-      Serial.println("Connected successfully.");
-      return true;
-    }
-    else
-    {
-      Serial.println("Connection failed, retrying...");
-      delay(1000); // Wait before retrying
-    }
-  }
-
-  Serial.print("Failed to connect to server: ");
-  Serial.println(host);
-  return false;
-}
-
-// ###########################################################
 // #########################SETUP#############################
 // ###########################################################
 
 void setup()
 {
   // Starting Software Serial and waiting its "ready state"
-  Serial.begin(115200);
+  Serial.begin(9600);
   while (!Serial)
   {
   };
@@ -239,20 +196,37 @@ void setup()
 
   Serial.println("Setting up HTTPS connexion >>>");
 
-  Serial.println("Initialize the NTPClient...");
-  // Initialize the NTPClient
-  WiFiUDP ntpUDP;
-  NTPClient timeClient(ntpUDP, ntpServer, gmtOffset_sec, daylightOffset_sec);
-  Serial.println("Synchronize time...");
-  // Synchronize time
-  timeClient.begin();
+  // Use HTTPSRedirect class to create a new TLS connection
+  client = new HTTPSRedirect(httpsPort);
+  client->setInsecure();
+  client->setPrintResponseBody(true);
+  client->setContentTypeHeader("application/json");
 
-  // if we couldn't connect we abort
-  if (!connectToServer(client, host, httpsPort))
+  Serial.print("Connecting to ");
+  Serial.println(host);
+
+  // Try to connect for a maximum of 5 times
+  bool flag = false;
+  for (int i = 0; i < 5; i++)
   {
-    Serial.println("Exiting setup due to connection failure.");
+    int retval = client->connect(host, httpsPort);
+    if (retval == 1)
+    {
+      flag = true;
+      Serial.println("Connected");
+      break;
+    }
+    else
+      Serial.println("Connection failed. Retrying...");
+  }
+  if (!flag)
+  {
+    Serial.print("Could not connect to server: ");
+    Serial.println(host);
     return;
   }
+  delete client;    // delete HTTPSRedirect object
+  client = nullptr; // delete HTTPSRedirect object
 
   Serial.println(" Initializing Pms7003...");
   pms.begin();
@@ -275,20 +249,14 @@ void setup()
 bool measurement_sucessful = 0;
 void loop(void)
 {
-  // Ensure client is connected before attempting to POST data
-  if (client == nullptr || !client->connected())
-  {
-    if (!connectToServer(client, host, httpsPort))
-    {
-      Serial.println("Failed to connect in loop. Retrying in next iteration.");
-      return;
-    }
-  }
   // get pm2.5 measurement
   std::pair<int, int> measurement_data = getAveragePm2dot5(10);
+  // std::pair<int, int> measurement_data;
+  // measurement_data.first = 12;
+  // measurement_data.second = 12;
 
   // get humidity and temperature from DHT11 sensor
-  float humidity = dht.getHumidity();
+  int humidity = dht.getHumidity();
   float temperature = dht.getTemperature();
 
   static bool flag = false;
@@ -312,17 +280,23 @@ void loop(void)
     Serial.println("Error creating client object!");
   }
 
-  // Create a nested JSON object for values
-  JsonObject values = doc.createNestedObject("values");
-  // Use the columns array for keys
-  values[columns[0]] = temperature;                // "Temperature"
-  values[columns[1]] = humidity;                   // "Humidity"
-  values[columns[2]] = measurement_data.first;     // "PM2.5"
-  values[columns[3]] = measurement_data.second;    // "Meas. duration"
+  char values_string[50];
+  snprintf(
+      values_string,
+      sizeof(values_string),
+      "%.1f,%d,%d,%d",
+      temperature,
+      humidity,
+      measurement_data.first,
+      measurement_data.second);
+  doc["values"] = values_string;
 
   // Serialize the JSON document to a string
   String payload;
   serializeJson(doc, payload);
+
+  // Create json object string to send to Google Sheets
+  // payload = payload_basev1 + "\"" + measurement_data.first + "," + measurement_data.second + "\"}";
 
   // Publish data to Google Sheets
   Serial.println("Publishing data...");
