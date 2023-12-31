@@ -57,8 +57,8 @@ HTTPSRedirect *client = nullptr;
 #define DHT_IN D5
 Pmsx003 pms(PMS7001_TX, PMS7001_RX); // PMS7001-tx_pin, PMS7001-rx_pin
 
-// ####measurement frequency####
-int sec_wait_main_loop = 600;
+// ####measurement frequency (in sec)####
+int measurement_freq = 600;
 
 DHTesp dht;
 
@@ -76,6 +76,7 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement)
 {
   const auto n = Pmsx003::Reserved;
   Pmsx003::pmsData data[n];
+
   uint16_t measurement_data[10] = {};
   uint16_t current_measurement = 0;
   auto prior_measurement_timestamp = 0;
@@ -84,8 +85,10 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement)
 
   Serial.println("Waking-up the sensor...");
   pms.write(Pmsx003::cmdWakeup);
-  pms.waitForData(Pmsx003::wakeupTime);
+  // wait for it to wake-up. 5000 seems the be the minimum time for it wakeup
+  // but waitForData is not working where delay with same amount of time does
   delay(5000);
+  // pms.waitForData(5000);
 
   Serial.println("starting measurement...");
   for (int i = 0; i < 10; ++i)
@@ -93,8 +96,9 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement)
     prior_measurement_timestamp = millis();
     for (int j = 0; j < 200; j++)
     {
+
       Pmsx003::PmsStatus status = pms.read(data, n);
-      delay(200);
+      pms.waitForData(2000, n);
       switch (status)
       {
       case Pmsx003::OK:
@@ -102,13 +106,14 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement)
         current_measurement_duration = millis() - prior_measurement_timestamp;
         measurement_duration += current_measurement_duration;
         Serial.print((String) "measurement " + i + " succeeded in " + measurement_duration + " ms : ");
-        j = 200;
         // For loop starts from 3
         // Skip the first three data (PM1dot0CF1, PM2dot5CF1, PM10CF1)
         for (size_t i = Pmsx003::PM1dot0; i < n - 6; ++i)
           Serial.print((String) "\t" + data[i] + " " + Pmsx003::dataNames[i]);
         Serial.println();
         current_measurement = data[4];
+        j = 200;
+        break;
       }
       case Pmsx003::noData:
         break;
@@ -174,6 +179,8 @@ std::pair<uint16_t, uint16_t> getAveragePm2dot5(int nb_measurement)
   }
   pm2dot5_avg = (uint16_t)round(sum / nb_valid_measurement);
 
+  Serial.println((String) "Putting the sensor to sleep");
+  pms.write(Pmsx003::cmdSleep);
   return std::make_pair(pm2dot5_avg, measurement_duration);
 }
 
@@ -206,32 +213,23 @@ void setup()
   Serial.println(host);
 
   // Try to connect for a maximum of 5 times
-  bool flag = false;
   for (int i = 0; i < 5; i++)
   {
-    int retval = client->connect(host, httpsPort);
-    if (retval == 1)
+    if (client->connect(host, httpsPort))
     {
-      flag = true;
-      Serial.println("Connected");
+      Serial.print("Connected to ");
+      Serial.println(host);
       break;
     }
     else
-      Serial.println("Connection failed. Retrying...");
+      Serial.println((String) "Connection failed. Retrying " + i + "/5 ...");
   }
-  if (!flag)
-  {
-    Serial.print("Could not connect to server: ");
-    Serial.println(host);
-    return;
-  }
+
   delete client;    // delete HTTPSRedirect object
   client = nullptr; // delete HTTPSRedirect object
 
   Serial.println(" Initializing Pms7003...");
   pms.begin();
-  pms.waitForData(Pmsx003::wakeupTime);
-  pms.write(Pmsx003::cmdWakeup);
   pms.waitForData(Pmsx003::wakeupTime);
   pms.write(Pmsx003::cmdModeActive);
 
@@ -249,70 +247,92 @@ void setup()
 bool measurement_sucessful = 0;
 void loop(void)
 {
+  // make sure our PM2.5 sensor sleep
+  pms.write(Pmsx003::cmdSleep);
+
+  if (client == nullptr)
+  {
+    client = new HTTPSRedirect(httpsPort);
+    client->setInsecure();
+    client->setPrintResponseBody(true);
+    client->setContentTypeHeader("application/json");
+  }
+  if (client == nullptr)
+  {
+    Serial.println("Error creating client object!");
+  }
+  else
+  {
+    if (!client->connected())
+    {
+      if (client->connect(host, httpsPort))
+      {
+        Serial.print("Connected to ");
+        Serial.println(host);
+      }
+      else
+      {
+        Serial.print("Could not connect to server: ");
+        Serial.println(host);
+        return;
+      }
+    }
+  }
+
+  // ###get the measurements###
+
   // get pm2.5 measurement
   std::pair<int, int> measurement_data = getAveragePm2dot5(10);
   // std::pair<int, int> measurement_data;
   // measurement_data.first = 12;
   // measurement_data.second = 12;
 
-  // get humidity and temperature from DHT11 sensor
-  int humidity = dht.getHumidity();
-  float temperature = dht.getTemperature();
+  // if has no measurement time, meausrement succeeded and we push gspread
+  if (measurement_data.second)
+  {
+    // get humidity and temperature from DHT11 sensor
+    int humidity = dht.getHumidity();
+    float temperature = dht.getTemperature();
 
-  static bool flag = false;
-  if (!flag)
-  {
-    client = new HTTPSRedirect(httpsPort);
-    client->setInsecure();
-    flag = true;
-    client->setPrintResponseBody(true);
-    client->setContentTypeHeader("application/json");
-  }
-  if (client != nullptr)
-  {
-    if (!client->connected())
+    char values_string[50];
+    snprintf(
+        values_string,
+        sizeof(values_string),
+        "%.1f,%d,%d,%d",
+        temperature,
+        humidity,
+        measurement_data.first,
+        measurement_data.second);
+    doc["values"] = values_string;
+
+    // Serialize the JSON document to a string
+    String payload;
+    serializeJson(doc, payload);
+
+    // Create json object string to send to Google Sheets
+    // payload = payload_basev1 + "\"" + measurement_data.first + "," + measurement_data.second + "\"}";
+
+    // Publish data to Google Sheets
+    Serial.println("Publishing data...");
+    Serial.println(payload);
+    if (client->POST(url, host, payload))
     {
-      client->connect(host, httpsPort);
+      // do stuff here if publish was successful
+      Serial.println("Data successfully uploaded to spreadsheet");
     }
+    else
+    {
+      // do stuff here if publish was not successful
+      Serial.println("Error while connecting");
+    }
+
+    //  we wait measurement_freq before next loop
+    Serial.println((String) "end of loop, Next loop in " + measurement_freq + "s");
+    delay(measurement_freq * 1000);
   }
   else
   {
-    Serial.println("Error creating client object!");
+    // measurement fails we wait a bit before trying again
+    delay(5000);
   }
-
-  char values_string[50];
-  snprintf(
-      values_string,
-      sizeof(values_string),
-      "%.1f,%d,%d,%d",
-      temperature,
-      humidity,
-      measurement_data.first,
-      measurement_data.second);
-  doc["values"] = values_string;
-
-  // Serialize the JSON document to a string
-  String payload;
-  serializeJson(doc, payload);
-
-  // Create json object string to send to Google Sheets
-  // payload = payload_basev1 + "\"" + measurement_data.first + "," + measurement_data.second + "\"}";
-
-  // Publish data to Google Sheets
-  Serial.println("Publishing data...");
-  Serial.println(payload);
-  if (client->POST(url, host, payload))
-  {
-    // do stuff here if publish was successful
-    Serial.println("Data successfully uploaded to spreadsheet");
-  }
-  else
-  {
-    // do stuff here if publish was not successful
-    Serial.println("Error while connecting");
-  }
-
-  Serial.println((String) "end of loop, putting the sensor to sleep for: " + sec_wait_main_loop);
-  pms.write(Pmsx003::cmdSleep);
-  delay(sec_wait_main_loop * 1000);
 }
