@@ -66,15 +66,23 @@ public:
             }
         }
 
+        // Create the values string using snprintf
+        char valuesString[50]; // Adjust the size as needed
+        snprintf(
+            valuesString,
+            sizeof(valuesString),
+            "%.1f,%d,%d,%d",
+            temperature,
+            humidity,
+            firstData,
+            secondData
+        );
+
         // Create a JSON object
         StaticJsonDocument<200> doc;
         doc["command"] = "append_row";
         doc["sheet_name"] = "Sheet1";
-        JsonArray values = doc.createNestedArray("values");
-        values.add(temperature);
-        values.add(humidity);
-        values.add(firstData);
-        values.add(secondData);
+        doc["values"] = valuesString;
 
         // Serialize JSON object to a String
         String jsonString;
