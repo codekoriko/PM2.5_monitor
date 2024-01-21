@@ -48,7 +48,7 @@ const char *columns[] = {
 Pmsx003 pms(PMS7001_TX, PMS7001_RX); // PMS7001-tx_pin, PMS7001-rx_pin
 
 // ####measurement frequency (in sec)####
-int measurement_freq = 600;
+int measurement_freq = 30;
 
 DHTesp dht;
 
